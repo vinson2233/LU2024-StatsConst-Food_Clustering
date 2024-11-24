@@ -1,0 +1,797 @@
+---
+title: "Vinson Clustering"
+output: html_notebook
+---
+```{r}
+set.seed(2233)
+```
+
+```{r}
+setwd("C:\\Users\\vinso\\Kuliah\\StatisticalConsulting")
+```
+
+```{r}
+library(tidyverse)
+```
+```{r}
+
+```
+
+```{r}
+df_num = read_csv("30th_oct-kroger_clean.csv")
+df_add = read_csv("30th_oct-additives_extracted.csv")
+df_add_meta = read_csv("30th_oct-additives_info.csv")
+```
+```{r}
+df_add_num = df_add_meta %>% 
+  # filter(is_upf_marker == "Yes") %>% 
+  right_join(df_add,
+             by = join_by(Substance == additives_detected),
+             relationship = "many-to-many") %>% 
+  arrange(upc) %>% 
+  filter(!is.na(used_for)) %>% 
+  mutate(val = 1) %>% 
+  pivot_wider(
+    id_cols = upc,
+    names_from = used_for,
+    values_from = val,
+    values_fn = sum,
+    values_fill = 0
+)
+```
+
+```{r}
+df_add_cat = df_add_num %>% mutate(across(-upc, ~ factor(ifelse(. > 0, "yes", "no"))))
+```
+
+# All numerical
+
+```{r}
+df_num %>% filter(
+  total_fat_units == "g",
+  total_carbohydrate_units == "g",
+  saturated_fat_units == "g",
+  cholesterol_units == "mg",
+  sodium_units == "mg"
+) %>% select()
+```
+```{r}
+# df_num = df_num %>% mutate(total_fat_value = total_fat_value - saturated_fat_value - trans_fat_value,
+#                   total_carbohydrate_value = total_carbohydrate_value - dietary_fiber_value - sugar_value) %>% mutate(total_fat_value = ifelse(total_fat_value<0,0,total_fat_value),total_carbohydrate_value = ifelse(total_carbohydrate_value<0,0,total_carbohydrate_value)) 
+```
+
+
+```{r}
+df_num %>% select(upc,
+                  total_fat_value,
+                  total_carbohydrate_value,
+                   
+                   total_carbohydrate_value,
+                   protein_value,
+                   saturated_fat_value,
+                   sodium_value,
+                   dietary_fiber_value,
+                   cholesterol_value,
+                   sugar_value,
+                   trans_fat_value) %>% cor()
+```
+```{r}
+df_clust_allnum = df_num %>% 
+  select(upc,
+         total_carbohydrate_value,
+         dietary_fiber_value,
+         sugar_value,
+         protein_value,
+         total_fat_value,
+         saturated_fat_value,
+         trans_fat_value,
+         cholesterol_value,
+         sodium_value,
+         ) %>% 
+  left_join(df_add_num,by='upc') %>%  
+  mutate(across(everything(), ~ replace_na(., 0))) %>%
+  select(where(~ n_distinct(.) > 1))
+```
+For super small cluster, maybe keep them aside
+
+
+## 1. All Numerical
+```{r}
+library(factoextra)
+fviz_nbclust(df_clust_allnum %>% select(-upc) %>% log1p() %>% scale(), kmeans, method='silhouette',iter.max=20 )
+```
+```{r}
+fviz_nbclust(df_clust_allnum %>% select(-upc) %>% log1p() %>% scale(), kmeans, method='wss',iter.max=20 )
+```
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(Rtsne)
+library(gridExtra)
+
+# Function to plot PCA and t-SNE side by side
+# Load required libraries
+library(ggplot2)
+library(Rtsne)
+library(gridExtra)
+library(dplyr)
+library(formattable)
+
+# Function to plot PCA and t-SNE with customizations
+plot_pca_tsne <- function(df, clusters,method_name) {
+  # Scale the data
+  df_scaled <- scale(df)
+  
+  # Perform PCA
+  pca_result <- prcomp(df_scaled, center = TRUE, scale. = TRUE)
+  pca_df <- as.data.frame(pca_result$x[, 1:2])
+  pca_df$cluster <- as.factor(clusters)
+  
+  # Extract loadings for biplot
+  loadings <- as.data.frame(pca_result$rotation[, 1:2])
+  loadings$var <- rownames(loadings)
+  
+  # PCA Plot with color as category, facets as cluster, and biplot arrows
+  pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = cluster)) +
+    geom_point(alpha = 0.7, size = 1) +
+    labs(title = "PCA Biplot of Clustering Result") +
+    theme_minimal() 
+  
+  # Perform t-SNE
+  set.seed(42)  # For reproducibility
+  tsne_result <- Rtsne(df_scaled, dims = 2, perplexity = 30, verbose = TRUE, max_iter = 500,check_duplicates=F)
+  tsne_df <- as.data.frame(tsne_result$Y)
+  tsne_df$cluster <- as.factor(clusters)
+  
+  # t-SNE Plot with color as category and facets as cluster
+  tsne_plot <- ggplot(tsne_df, aes(x = V1, y = V2, color = cluster)) +
+    geom_point(alpha = 0.7, size = 1) +
+    labs(title = paste("t-SNE of",method_name,"Clustering Result")) +
+    theme_minimal() 
+  # Arrange plots side by side
+  grid.arrange(pca_plot, tsne_plot, ncol = 2)
+}
+
+
+# Load necessary libraries
+library(kableExtra)
+library(dplyr)
+library(scales)
+
+display_cluster_mean <- function(df){
+  df_format = df %>% 
+  select(-upc) %>% 
+  group_by(cluster) %>% mutate(across(everything(),~ifelse(.=="yes",1,ifelse(.=="no",0,.)))) %>% 
+  summarise(across(everything(), mean, na.rm = TRUE)) %>% 
+  pivot_longer(cols = total_carbohydrate_value:TRACER) %>% 
+  pivot_wider(id_cols = name,names_from = cluster,values_from = value) %>% as.data.frame() 
+
+  # Identify the numeric columns to apply formatting to
+  numeric_cols <- names(df_format)[sapply(df_format, is.numeric)]
+  
+  # Define color mapping function
+  col_fun <- col_numeric(palette = c("white", "red"), domain = c(0, 1))
+  
+  # Apply row-wise normalization and cell formatting
+  df_formatted <- df_format %>%
+    rowwise() %>%
+    mutate(
+      across(all_of(numeric_cols), ~ {
+        # Extract numeric values of the current row
+        row_values <- c_across(all_of(numeric_cols))
+        # Normalize the cell value within the row
+        normalized_value <- (. - min(row_values)) / (max(row_values) - min(row_values))
+        # Handle cases where all values in a row are equal
+        normalized_value <- ifelse(is.na(normalized_value), 0, normalized_value)
+        # Apply cell formatting with background color
+        cell_spec(., background = col_fun(normalized_value))
+      })
+    ) %>%
+    ungroup()
+  
+  # Generate and display the table
+  df_formatted %>%
+    kable("html", escape = FALSE, align = "c") %>%
+    kable_styling(full_width = FALSE)
+    
+  }
+
+```
+```{r}
+kmeans_num2 = kmeans(df_clust_allnum %>% select(-upc) %>% scale(),centers = 2)
+df_clust_allnum$cluster = kmeans_num2$cluster
+display_cluster_mean(df_clust_allnum)
+
+df_clust_allnum %>% group_by(cluster) %>% sample_n(10) %>% left_join(df_num %>% select(upc,product_name,ingredients,category_1,category_2)) %>% select(cluster,category_1,category_2,product_name)
+
+plot_pca_tsne(df_clust_allnum %>% select(-upc), kmeans_num2$cluster,"K-means")
+```
+```{r}
+df_add
+```
+
+```{r}
+df_clust_allnum
+```
+
+```{r,fig.width=15}
+kmeans_num = kmeans(df_clust_allnum %>% select(-upc) %>% log1p()%>% scale(),centers = 5)
+
+df_clust_allnum$cluster = kmeans_num$cluster
+display_cluster_mean(df_clust_allnum)
+```
+
+```{r}
+df_clust_allnum %>% group_by(cluster) %>% sample_n(10) %>% left_join(df_num %>% select(upc,product_name,ingredients,category_1,category_2)) %>% select(cluster,category_1,category_2,product_name)
+```
+
+```{r,fig.width=12}
+library(stringr)
+
+# Calculate mean nutrient values per cluster
+nutrient_means <- df_clust_allnum %>% mutate(across(total_carbohydrate_value:sodium_value,~scale(log1p(.)))) %>%
+  group_by(cluster) %>%
+  summarise(across(total_carbohydrate_value:sodium_value, mean))
+
+# Pivot to long format
+nutrient_long <- nutrient_means %>%
+  pivot_longer(
+    cols = total_carbohydrate_value:sodium_value,
+    names_to = "Nutrient",
+    values_to = "Mean_Value"
+  )
+
+# Get top 3 nutrients per cluster
+top_nutrients <- nutrient_long %>%
+  group_by(cluster) %>%
+  top_n(3, abs(Mean_Value)) %>%
+  arrange(cluster, desc(Mean_Value))
+
+# Calculate mean additive amounts per cluster
+additive_means <- df_clust_allnum %>% mutate(across(`NUTRITIVE SWEETENER`:TRACER,~scale(log1p(.))))%>%
+  group_by(cluster) %>%
+  summarise(across(`NUTRITIVE SWEETENER`:TRACER, mean))
+
+# Pivot to long format
+additive_long <- additive_means %>%
+  pivot_longer(
+    cols = `NUTRITIVE SWEETENER`:TRACER,
+    names_to = "Additive",
+    values_to = "Mean_Amount"
+  )
+
+# Get top 3 additives per cluster
+top_additives <- additive_long %>%
+  group_by(cluster) %>%
+  top_n(3, Mean_Amount) %>%
+  arrange(cluster, desc(Mean_Amount))
+
+
+# Wrap additive names to a specified width
+top_additives <- top_additives %>%
+  mutate(Wrapped_Additive = str_wrap(Additive, width = 10))
+
+# Combine top nutrients and additives
+top_features <- bind_rows(
+  top_nutrients %>% mutate(Feature_Type = "Nutrient", Feature = Nutrient, Value = Mean_Value),
+  top_additives %>% mutate(Feature_Type = "Additive", Feature = Wrapped_Additive, Value = Mean_Amount)
+)
+
+# Plot combined features
+ggplot(top_features, aes(x = reorder(Feature, Value), y = Value, fill = Feature_Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~ cluster, scales = "free") +
+  labs(
+    title = "Top 3 Nutrients and Additives per Cluster",
+    x = "Feature",
+    y = "Value"
+  ) +
+  theme_minimal()+
+  theme(
+    axis.text.y = element_text(size = 6.5)  # Adjust text size if needed
+  )
+
+```
+
+```{r,fig.width=8}
+plot_pca_tsne(df_clust_allnum %>% select(-upc) %>% log1p()%>% scale(), kmeans_num$cluster,"K-means")
+```
+
+
+## 2. Numerical with categorical
+
+```{r}
+df_clust_mixed = df_num %>% 
+  select(upc,category_1,category_2,product_name,
+         total_carbohydrate_value,
+         dietary_fiber_value,
+         sugar_value,
+         protein_value,
+         total_fat_value,
+         saturated_fat_value,
+         trans_fat_value,
+         cholesterol_value,
+         sodium_value,
+         ) %>% 
+  left_join(df_add_cat,by='upc') %>%  
+  mutate(across(everything(), ~ replace_na(., "no"))) %>%
+  select(where(~ n_distinct(.) > 1))
+```
+
+```{r}
+df_clust_mixed %>% count(cluster)
+```
+
+```{r}
+df_clust_mixed %>% select(product_name,`FLAVORING AGENT OR ADJUVANT`:`SOLVENT`) %>% sample_n(10)
+```
+```{r}
+df_clust_mixed
+```
+
+```{r}
+library("FactoMineR")
+library("factoextra")
+res.famd_numcat <- FAMD(df_clust_mixed %>% select(-upc,-category_2,-category_1,-product_name) %>% mutate(across(where(is.numeric), ~ scale(log1p(.)))), ncp = 20, sup.var = NULL, ind.sup = NULL, graph = F)
+
+install.packages("fpc")
+library(fpc)
+clusterboot(res.famd_numcat$ind$coord,B=100,bootmethod="subset",subtuning=5000,clustermethod = kmeansCBI,krange=5,seed=2233)
+```
+```{r}
+get_eigenvalue(res.famd_numcat)
+```
+
+```{r}
+fviz_famd_var(res.famd_numcat, "quanti.var", col.var = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE)
+```
+
+```{r}
+fviz_nbclust(res.famd_numcat$ind$coord, kmeans, method='silhouette',iter.max=25,k.max = 50,verbose = T,nstart =  25)
+```
+```{r}
+fviz_nbclust(res.famd_numcat$ind$coord, kmeans, method='wss',iter.max=25,k.max = 50,verbose = T,nstart =  25)
+```
+```{r}
+fviz_nbclust(res.famd_numcat$ind$coord, kmeans, method='silhouette',iter.max=25,k.max = 10,verbose = T,nstart =  25)
+```
+```{r}
+fviz_nbclust(res.famd_numcat$ind$coord, kmeans, method='wss',iter.max=25,k.max = 10,verbose = T,nstart =  25)
+```
+
+```{r}
+kmeans_num = kmeans(res.famd_numcat$ind$coord,centers = 5,nstart = 25,iter.max = 25)
+
+# df_clust_mixed$cluster = kmeans_num$cluster
+# res.famd_numcat$cluster= kmeans_num$cluster
+# display_cluster_mean(df_clust_mixed)
+
+# distances <- apply(res.famd_numcat$ind$coord, 1, function(point) {
+#   cluster <- kmeans_num$cluster[which(res.famd_numcat$ind$coord == point, arr.ind = TRUE)[1]]
+#   center <- kmeans_num$centers[cluster, ]
+#   sqrt(sum((point - center)^2))
+# })
+# write_csv(df_clust_mixed,file = "save_checkpoint.csv")
+df_clust_mixed = read_csv("save_checkpoint.csv")
+# df_clust_mixed$cluster_distance = distances
+
+df_clust_mixed %>% filter(cluster==5)%>% sample_n(30) %>% select(cluster,category_2,product_name)
+
+
+df_clust_mixed %>% count(cluster,category_2) %>% arrange(desc(n)) %>% group_by(cluster) %>% slice_max(order_by = n,n=3) %>% left_join(
+
+
+df_clust_mixed %>% 
+  group_by(cluster,category_2) %>% 
+  slice_min(order_by = cluster_distance,n=10) %>% 
+  select(cluster,category_1,category_2,product_name,cluster_distance))
+```
+
+```{r}
+data_famd = data.frame(res.famd_numcat$ind$coord)
+data_famd$product_name = df_clust_mixed$product_name
+data_famd$cluster = df_clust_mixed$cluster
+
+ggplot(data_famd,aes(x=Dim.1,y=Dim.2,col = factor(cluster))) + geom_point()
+```
+```{r}
+df_clust_mixed
+```
+
+```{r}
+data_famd %>% filter(cluster==1) %>% arrange(Dim.1) %>% select(Dim.1,Dim.2,product_name)
+data_famd %>% filter(cluster==2,between(Dim.1,0,2),between(Dim.2, 9, 10)) %>% select(product_name) 
+```
+
+```{r}
+df_clust_mixed[grepl("cheese",tolower(df_clust_mixed$product_name)),"cluster"] %>% count(cluster)
+```
+```{r}
+df_clust_mixed[,"cluster"] %>% count(cluster)
+```
+```{r}
+258/3613
+```
+
+```{r}
+upf_markers = (df_add_meta %>% filter(is_upf_marker=="Yes") %>% .$Substance) %>% unique()
+df_add$is_upf_marker = df_add$additives_detected %in%upf_markers
+
+upc_with_upf_marker = df_add %>% filter(is_upf_marker==TRUE) %>% count(upc,name = "n_upf_marker")
+
+if ("n_upf_marker" %in% names(df_clust_mixed)){
+  df_clust_mixed$n_upf_marker = NULL
+}
+df_clust_mixed = df_clust_mixed %>% left_join(upc_with_upf_marker,by="upc")
+df_clust_mixed$n_upf_marker = ifelse(is.na(df_clust_mixed$n_upf_marker),0,df_clust_mixed$n_upf_marker) 
+```
+
+```{r}
+c=3
+df_add %>% 
+  left_join(df_clust_mixed %>% select(upc, cluster), by = "upc") %>% 
+  count(cluster,is_upf_marker, additives_detected) %>% 
+  group_by(cluster) %>% 
+  slice_max(order_by = n, n = 25) %>% filter(cluster==c) %>% ggplot(aes(x = n,fill=is_upf_marker, y = forcats::fct_reorder(additives_detected, n))) + geom_col() +
+  xlab(NULL) +
+  ylab('Count') +
+  ggtitle(paste('Top 25 additives for Cluster', c)) + theme_minimal() + scale_fill_manual(values=c("gray", "red2"))
+```
+
+```{r}
+library(stringr)
+df_num$num_ing= df_num$ingredients %>% str_count(",") + 1
+df_num %>% select(upc,num_ing)
+
+df_clust_mixed %>% left_join(df_num %>% select(upc,num_ing),by="upc") %>% mutate(prop_upf = n_upf_marker/num_ing) %>% ggplot(aes(x=prop_upf,col=factor(cluster))) + geom_density(size=1) + theme_light() +xlim(0,1) + xlab("# UPF Markers / # Ingredients") + ggtitle("Proportion of UPF markers in the ingredients")
+```
+```{r}
+df_clust_mixed %>% group_by(cluster) %>% summarise(mean(n_upf_marker>0))
+```
+
+```{r}
+df_clust_mixed %>% left_join(df_num %>% select(upc,num_ing),by="upc") %>% count(cluster,num_ing) %>% ggplot(aes(x=num_ing,y=n,col=factor(cluster))) + geom_line(size=1) + xlim(0,50) + theme_light() + xlab("Number on Ingredients") + ggtitle("Number of ingredients per product")
+
+```
+
+```{r}
+c = 5
+df_clust_mixed %>% filter(cluster==c) %>% count(category_2) %>% arrange(desc(n)) %>% top_n(10) %>% ggplot(aes(x=n,y=forcats::fct_reorder(category_2,n))) + geom_col(fill = 'steelblue2') +xlab(NULL) +
+    ylab('Count') +
+    ggtitle(paste('Top 10 Food Categories for Cluster', c)) + theme_minimal()
+```
+```{r}
+```
+
+```{r}
+table(df_clust_mixed$cluster,df_clust_mixed$contains_upf_marker) %>% prop.table(margin=1)
+```
+
+```{r}
+df_clust_mixed %>% group_by(cluster) %>% sample_n(20) %>% left_join(df_num %>% select(upc,product_name,ingredients,category_1,category_2)) %>% select(cluster,category_1,category_2,product_name)
+```
+```{r,fig.width=10}
+library(stringr)
+
+# Calculate mean nutrient values per cluster
+nutrient_means <- df_clust_mixed %>% mutate(across(total_carbohydrate_value:sodium_value,~scale(log1p(.)))) %>%
+  group_by(cluster) %>%
+  summarise(across(total_carbohydrate_value:sodium_value, mean))
+
+# Pivot to long format
+nutrient_long <- nutrient_means %>%
+  pivot_longer(
+    cols = total_carbohydrate_value:sodium_value,
+    names_to = "Nutrient",
+    values_to = "Mean_Value"
+  )
+
+# Get top 3 nutrients per cluster
+top_nutrients <- nutrient_long %>%
+  group_by(cluster) %>%
+  top_n(3, abs(Mean_Value)) %>%
+  arrange(cluster, desc(Mean_Value))
+
+# Calculate mean additive amounts per cluster
+additive_means <- df_clust_mixed %>% mutate(across(`NUTRITIVE SWEETENER`:TRACER,~ifelse(.=="yes",1,ifelse(.=="no",0,.)))) %>%
+  group_by(cluster) %>%
+  summarise(across(`NUTRITIVE SWEETENER`:TRACER, mean))
+
+# Pivot to long format
+additive_long <- additive_means %>%
+  pivot_longer(
+    cols = `NUTRITIVE SWEETENER`:TRACER,
+    names_to = "Additive",
+    values_to = "Mean_Amount"
+  )
+
+# Get top 3 additives per cluster
+top_additives <- additive_long %>%
+  group_by(cluster) %>%
+  top_n(3, Mean_Amount) %>%
+  arrange(cluster, desc(Mean_Amount))
+
+
+# Wrap additive names to a specified width
+top_additives <- top_additives %>%
+  mutate(Wrapped_Additive = str_wrap(Additive, width = 10))
+
+# Combine top nutrients and additives
+top_features <- bind_rows(
+  top_nutrients %>% mutate(Feature_Type = "Nutrient", Feature = Nutrient, Value = Mean_Value),
+  top_additives %>% mutate(Feature_Type = "Additive", Feature = Wrapped_Additive, Value = Mean_Amount)
+)
+
+# Plot combined features
+ggplot(top_features, aes(x = reorder(Feature, Value), y = Value, fill = Feature_Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~ cluster, scales = "free") +
+  labs(
+    title = "Top 3 Nutrients and Additives per Cluster",
+    x = "Feature",
+    y = "Value"
+  ) +
+  theme_minimal()+
+  theme(
+    axis.text.y = element_text(size = 6.5)  # Adjust text size if needed
+  )
+
+```
+```{r}
+data.frame(res.famd_numcat$ind$coord) %>% mutate(cluster = factor(kmeans_num$cluster) , `UPF Marker` = df_clust_mixed$n_upf_marker>1 )%>% ggplot(aes(x=Dim.1,y=Dim.2,col=cluster,size=`UPF Marker`,shape = `UPF Marker`)) + geom_point(alpha=0.3,size=2) + theme_minimal()
+```
+## Repeat the process
+```{r}
+df_weird_clust = df_clust_mixed %>% mutate(cluster = kmeans_num$cluster) %>% filter(cluster==4)
+df_non_weird_clust = df_clust_mixed %>% mutate(cluster = kmeans_num$cluster) %>% filter(cluster!=4)
+```
+```{r}
+df_weird_clust
+```
+
+```{r}
+library("FactoMineR")
+library("factoextra")
+res.famd <- FAMD(df_non_weird_clust %>% select(-upc,-category_2,-category_1,-cluster-product_name) %>% mutate(across(where(is.numeric), ~ scale(log1p(.)))), ncp = 20, sup.var = NULL, ind.sup = NULL, graph = TRUE)
+```
+
+```{r}
+get_eigenvalue(res.famd)
+```
+```{r}
+fviz_nbclust(res.famd$ind$coord, kmeans, method='silhouette',iter.max=20 )
+```
+
+```{r}
+fviz_nbclust(res.famd$ind$coord, kmeans, method='wss',iter.max=20 )
+```
+
+```{r}
+kmeans_num = kmeans(res.famd$ind$coord,centers = 5)
+df_non_weird_clust$cluster = kmeans_num$cluster
+display_cluster_mean(df_non_weird_clust)
+```
+```{r}
+nutrient_means <- df_non_weird_clust %>% mutate(across(total_carbohydrate_value:sodium_value,~scale(log1p(.)))) %>%
+  group_by(cluster) %>%
+  summarise(across(total_carbohydrate_value:sodium_value, mean))
+
+# Pivot to long format
+nutrient_long <- nutrient_means %>%
+  pivot_longer(
+    cols = total_carbohydrate_value:sodium_value,
+    names_to = "Nutrient",
+    values_to = "Mean_Value"
+  )
+
+# Get top 3 nutrients per cluster
+top_nutrients <- nutrient_long %>%
+  group_by(cluster) %>%
+  top_n(3, abs(Mean_Value)) %>%
+  arrange(cluster, desc(Mean_Value))
+
+# Calculate mean additive amounts per cluster
+additive_means <- df_non_weird_clust %>% mutate(across(`NUTRITIVE SWEETENER`:TRACER,~ifelse(.=="yes",1,ifelse(.=="no",0,.))))%>%
+  group_by(cluster) %>%
+  summarise(across(`NUTRITIVE SWEETENER`:TRACER, mean))
+
+# Pivot to long format
+additive_long <- additive_means %>%
+  pivot_longer(
+    cols = `NUTRITIVE SWEETENER`:TRACER,
+    names_to = "Additive",
+    values_to = "Mean_Amount"
+  )
+
+# Get top 3 additives per cluster
+top_additives <- additive_long %>%
+  group_by(cluster) %>%
+  top_n(3, Mean_Amount) %>%
+  arrange(cluster, desc(Mean_Amount))
+
+
+# Wrap additive names to a specified width
+top_additives <- top_additives %>%
+  mutate(Wrapped_Additive = str_wrap(Additive, width = 10))
+
+# Combine top nutrients and additives
+top_features <- bind_rows(
+  top_nutrients %>% mutate(Feature_Type = "Nutrient", Feature = Nutrient, Value = Mean_Value),
+  top_additives %>% mutate(Feature_Type = "Additive", Feature = Wrapped_Additive, Value = Mean_Amount)
+)
+
+# Plot combined features
+ggplot(top_features, aes(x = reorder(Feature, Value), y = Value, fill = Feature_Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~ cluster, scales = "free") +
+  labs(
+    title = "Top 3 Nutrients and Additives per Cluster",
+    x = "Feature",
+    y = "Value"
+  ) +
+  theme_minimal()+
+  theme(
+    axis.text.y = element_text(size = 6.5)  # Adjust text size if needed
+  )
+
+```
+```{r}
+data.frame(res.famd$ind$coord) %>% mutate(cluster = kmeans_num$cluster)%>% ggplot(aes(x=Dim.1,y=Dim.2,col=factor(cluster))) + geom_point() 
+```
+```{r}
+data("diamonds")
+devtools::install_github('bbc/bbplot')
+diamonds
+```
+```{r}
+windowsFonts(Helvetica = "TT Arial")
+library(bbplot)
+ggplot(diamonds,aes(x=carat,fill=cut)) + geom_histogram(binwidth = 0.01)+ggtitle("Histogram",subtitle = "carat") + xlim(c(0,3))  + bbc_style()
+```
+
+```{r}
+immigration = c(45407,132850,220853,252528,403108,335668)
+livebornchildren = c(239128,206619,168681,179441,167504,164487)
+x_time = c(1960,2000,2020,2021,2022,2023)
+immigration/livebornchildren
+
+library(ggplot2)
+library(tidyr)
+df1 = data.frame(immigration=immigration,livebornchildren=livebornchildren,year=x_time) %>% pivot_longer(cols = c(immigration,livebornchildren)) 
+
+df %>% ggplot(aes(x=year,y=value,col=name)) + geom_line(size=0.1) + geom_point(size=3)
+```
+
+```{r}
+df2 = data.frame(immigration=immigration,livebornchildren=livebornchildren,year=x_time)
+df2$immi_per_born = df2$immigration/df2$livebornchildren
+df2 %>% ggplot(aes(x=year,y=immi_per_born)) + geom_col()
+
+```
+```{r}
+df2
+```
+
+```{r}
+(2.0406962	- 0.6429709)/0.6429709
+```
+```{r}
+Immigration Surges: Ratio of New Immigrants to Newborns in the Netherlands Jumps 217% Over Two Decades
+```
+
+```{r}
+Over the Past 2 decades, New immigration ratio to newborn baby increase by 217%
+```
+
+```{r}
+library(faraway)
+data("sat")
+g <- lm(total ~ expend + salary + ratio + takers, data=sat)
+summary(g)
+
+```
+```{r}
+X <- model.matrix(g)
+H <- X%*%solve(t(X)%*%X)%*%t(X)
+levs <- diag(H)
+#Easier way to get the hat values
+levs <- lm.influence(g)$hat
+
+ k <- dim(X)[2]-1 # Number of predictors
+ n <- dim(sat)[1]
+(avLev <- (k+1)/n)
+```
+```{r}
+cutoff1 <- 2*mean(levs)
+cutoff2 <- 3*mean(levs)
+
+levs[levs>cutoff1]
+```
+```{r}
+stRes <- rstudent(g) 
+cutoff_res <- 2
+stRes[abs(stRes) > cutoff_res]
+```
+
+```{r}
+DFFITS_val <- stRes* sqrt(levs / (1-levs))
+
+plot(DFFITS_val~levs, xlab = "Hat values", ylab = "Dffits")
+cutoff_dfit <- 2*sqrt(k/n)
+DFFITS_val[abs(DFFITS_val)>cutoff_dfit]
+```
+```{r}
+covratio_i <- 1/((1-levs)*((n-k-2+stRes^2)/(n-k-1))^(k+1))
+#covratio_i <- covratio(g)
+plot(covratio_i, xlab = "Hat values", ylab = "Dffits")
+abline(h=1)
+```
+
+```{r}
+library(car)
+outlierTest(g)
+```
+```{r}
+# plot Cook's distances and check the largest ones. 
+cdist <- cooks.distance(g)
+cutoff_cook <- 4/(n-k-1)
+plot(cdist) # index plot
+abline(h=cutoff_cook)
+cdist[cdist > cutoff_cook]
+
+#Obtain the standardized residuals
+standard_res <- rstandard(g)
+# Another way of calculating the Cook's distance
+cdist1 <- (standard_res^2 / (k+1)) *(levs / (1-levs))
+cbind(cdist, cdist1)
+sum((cdist - cdist1)^2)
+```
+```{r}
+satNew <- sat[! (rownames(sat) %in% c(names(cdist[cdist > cutoff_cook]))),]
+gNew <- lm(total ~ expend + salary + ratio + takers, data=sat)
+summary(gNew)
+```
+```{r} 
+m1 <- lm(prestige ~ income + education, data=Duncan)
+ lev <- lm.influence(m1)$hat
+ 
+ mean(lev)
+```
+```{r}
+wts <- 1/lm(abs(lmodel$residuals) ~ lmodel$fitted.values)$fitted.values^2
+# Perform weighted least squares regression
+wmodel <- lm(y ~ x, weights = wts, data = rndata)
+summary(wmodel)
+```
+```{r}
+x <- c(125,100,200,75,150,175,75,175,125,200,100)
+y <- c(160,112,124,28,152,156,42,124,150,104,136)
+RegModel <- lm(y~x)
+summary(RegModel)
+#Now check the ANOVA model
+AnModel <- lm(y ~ as.factor(x))
+#Compare two models.
+anova(RegModel,AnModel)
+```
+
+```{r}
+ma <- lm(ph ~ as.factor(rate), data=limeAL)
+(sigmaPE <- deviance(AnModel)/ma$df.residual)
+```
+
+```{r}
+(sigmaPE <- deviance(AnModel)/AnModel$df.residual)
+```
+```{r}
+anovaPe
+```
+

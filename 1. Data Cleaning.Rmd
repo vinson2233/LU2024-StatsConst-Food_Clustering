@@ -1,0 +1,557 @@
+---
+title: "Data cleaning v2"
+author: "Anete Mürk & Vinson Ciawandy"
+date: "2024-10-21"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message = FALSE}
+library(tidyverse)
+library(plotly)
+library(stringr)
+
+
+# install.packages("devtools")
+# devtools::install_github("yogevherz/plotme")
+library(plotme)
+```
+
+# 1. Data Reading
+
+1. Initial data 
+
+```{r}
+dataset = read.csv('kroger_2023-05-30final.csv') #Starting at 47287 rows
+```
+
+# 2. Data preprocessing
+
+## 1. Identify relevant subset of food and beverages (NO food supplements, alcohol, accessories, hygiene, cleaning....)
+```{r}
+not_relevant_category1 = c('Adult Beverage')
+not_relevant_category2 = c('Cleaning & Household','Glassware & Drinkware','Beauty and Personal Care','Beauty & Personal Care')
+not_relevant_category3 = c('Bath & Body','Skin Care','Hair Care','Medicines & Ointments',
+                          'Bath & Skincare','Diapering','Feminine Care','Oral Care','Makeup',
+                          'Deodorants','Sun Care','Shaving & Hair Removal','Coffe Mugs & Accessories')
+
+dataset = dataset %>% mutate(
+  is_category_unrelevant = (
+    category_1 %in% not_relevant_category1 |
+      category_2 %in% not_relevant_category2 |
+      category_3 %in% not_relevant_category3
+  ))
+```
+
+Visualization of the categories after removing unrelevant categories. 
+The plot split into 3 due to sheer amount categories. 
+```{r,figsize=14}
+dataset %>% 
+  filter(category_1 == "Pantry" & is_category_unrelevant==FALSE) %>% 
+  count(category_1,category_2,category_3) %>% count_to_sunburst(sort_by_n = T)
+```
+```{r}
+dataset %>% 
+  filter(category_1 %in% c("Beverage","Natural & Organic") & is_category_unrelevant==FALSE) %>% 
+  count(category_1,category_2,category_3) %>% 
+  count_to_sunburst(sort_by_n = T)
+```
+
+```{r}
+dataset %>% 
+  filter((!category_1 %in% c("Beverage","Natural & Organic","Pantry")) & is_category_unrelevant==FALSE) %>% 
+  count(category_1,category_2,category_3) %>% 
+  count_to_sunburst(sort_by_n = T) 
+```
+
+## 2. Within subset of relevant and unique food and beverages, flag products WITHOUT any nutrient composition information 
+
+We focus on 9 main macros (see part 7 of this document on the reason why we highlight these )
+```{r}
+dataset = dataset %>% 
+  mutate(
+    count_missing_macro = (
+      (total_fat=="") + 
+        (total_carbohydrate=="") + 
+        (protein=="") + 
+        (sodium=="") + 
+        (sugar=="") + 
+        (saturated_fat=="") + 
+        (cholesterol=="") +
+        (trans_fat=="")+
+        (dietary_fiber==""))
+    )
+```
+
+## 3. Within subset of relevant and unique food and beverages, flag products WITHOUT any ingredient list information
+
+```{r}
+dataset = dataset %>% 
+  mutate(
+    is_missing_ingredient = ingredients==""
+  )
+```
+
+## 4. Flag duplicates (binary Y/N indicator) from relevant subset of food and beverages to identify unique items only (a different flavor of the same brand+same size would be unique, a different size of the same brand+same flavor woudl NOT be unique)
+
+First need to manually check on how the product can be duplicated
+```{r}
+# filter data that contain number
+df_dup = dataset %>% select(product_name,
+                            category_1,
+                            category_2,
+                            category_3,
+                            brand,
+                            product_url) %>% 
+  filter(grepl("[0-9]", product_name)) %>% arrange(brand, product_name)
+
+df_dup %>% filter(brand %in% sample(unique(df_dup$brand), 10))
+```
+After extensive manual checking, these are some examples on how products can be duplicated : 
+
+24 Mantra Organic Green Tea - 100 Gm (3.5 Oz)		
+24 Mantra Organic Green Tea - 25 Teabags 37.5 Gm (1.32 Oz)  
+  
+776 Deluxe Extra Virgin Olive Oil PGI OLYMPIA 250ml		
+776 Deluxe Extra Virgin Olive Oil PGI OLYMPIA 500ml		
+776 Deluxe Extra Virgin Olive Oil PGI OLYMPIA 5lt  
+  
+776 Deluxe Greek White Wine Vinegar		 
+776 Deluxe Greek White Wine Vinegar (2L)  
+  
+7UP® Lemon Lime Zero Sugar Soda Bottle	  
+7UP® Lemon Lime Zero Sugar Soda Cans	  
+  
+A La Maison - Bar Soap - Oat Milk - 8.8 oz	
+A La Maison - Bar Soap - Oat Milk - Value 4 Pack	
+
+Aashirvaad Whole Wheat Atta - 10 Kg (22 Lb)	  
+Aashirvaad Whole Wheat Atta - 10 Lb  
+  
+Aiva CTC Black Tea 1 lb	  
+Aiva CTC Black Tea 2 lb  
+  
+Aiva Organic Amchur (Dry Mango) Powder 3.5 oz	  
+Aiva Organic Amchur (Dry Mango) Powder 7 oz  
+  
+Avocado Cream Moisture Repairing Mask 16oz	 
+Avocado Cream Moisture Repairing Mask 8oz  
+  
+All Sport Sports Drink Mix,Fruit Punch Flavor 10125041	  
+All Sport Sports Drink Mix,Fruit Punch Flavor 10125069  
+
+Almond Breeze - Almond Milk - Unsweetened Original - Case of 12 - 32 fl oz.  	
+Almond Breeze - Almond Milk - Unsweetened Original - Case of 8 - 64 fl oz.  
+
+Certified Organic Guarana Seed Powder 16 Oz - Natural Caffeine Energizing Superfood	  
+Certified Organic Guarana Seed Powder 8 Oz - Natural Caffeine Energizing Superfood  
+
+Black Seed Black Cumin Seed - Ground - 4 oz - Pack of 3  	
+Black Seed Black Cumin Seed - Ground - 4 oz  
+
+American Crew Molding Clay 3 oz 2 Pack  
+American Crew Molding Clay 3 oz 4 Pack  
+
+Certified Organic Ginkgo Leaf Powder 16oz by Alovitox - Healthy Brain Food  
+Certified Organic Ginkgo Leaf Powder 8oz by Alovitox - Healthy Brain Food  
+
+Barbara's Bakery - Shredded Wheat - Case of 12-15 OZ		
+Barbara's Bakery - Shredded Wheat - Case of 12-15 oz.	 
+
+Clif Bar - Organic Cool Mint Chocolate - Case of 12 - 2.4 oz.	Pantry	  
+Clif Bar - Organic Cool Mint Chocolate 2.4 oz - Pack of 12	Beverage  
+
+Gardetto's Original Recipe Snack Mix (40 Ounce)	Pantry	 
+Gardetto's Original Recipe Snack Mix (42 Count)	Pantry  
+
+The strategy to detect the duplication as folllow : 
+- Remove any information that reflects quantity/packaging of the product based on product names
+- Put duplicated product that have ingredients and nutrient information on top
+- Flag duplicate
+
+```{r}
+clean_product_name <- function(name) {
+  name <- tolower(name)  # Convert to lowercase for uniformity
+  
+  # Remove text within parentheses
+  name <- str_remove_all(name, "\\(.*?\\)")
+  
+  # Remove size/weight units and numbers
+  units <- c("mg", "g", "gm", "gram", "kg", "ml", "l", "lt", "lb", "oz", "fl oz", "teabags", "pack", "packs", "case", "cans", "bottle", "bottles", "bar", "bars", "lb\\.", "oz\\.", "g\\.", "ml\\.", "kg\\.")
+  pattern_units <- paste0("\\b\\d+\\s?(", paste(units, collapse = "|"), ")\\b")
+  name <- str_remove_all(name, pattern_units)
+  
+  # Remove 'case of', 'pack of', and similar phrases
+  name <- str_remove_all(name, "\\b(case|pack|value pack|value size|family pack|multi-pack|bundle)\\s*(of)?\\s*\\d*\\b")
+  
+  # Remove standalone numbers
+  name <- str_remove_all(name, "\\b\\d+\\b")
+  
+  # Remove extra spaces and special characters
+  name <- str_replace_all(name, "[^a-zA-Z0-9 ]", " ")
+  name <- str_squish(name)  # Remove extra whitespace
+  
+  return(name)
+}
+
+# Apply the cleaning function
+dataset$clean_name <- sapply(dataset$product_name, clean_product_name)
+
+# Prioritize product with complete information
+dataset = dataset %>% arrange(clean_name,count_missing_macro,is_missing_ingredient)
+
+dataset$is_duplicated = dataset$clean_name %>% duplicated() 
+```
+
+
+## 5. Within subset of relevant and unique food and beverages, standardize nutrient composition information per 100 gm of the solid product or 100 ml of liquid product 
+
+We need information for serving size. Let's examine relevant columns.
+
+```{r}
+dataset %>% filter(serving_size!="")%>% select(serving_size, serving_size_units, serving_size_value)
+```
+
+Multiple things can be observed.   
+- First, there are different units used for serving size. The value is not reported in units column sometimes missing. It could be extracted from a regular reporting pattern, e.g. (1.2g), but this is not always the case so we'll only use rows for which both serving_size_units exists and value is reported in grams or ml.  
+- In other cases serving size is something that is not helpful when it comes to converting nutrients to a common unit of measurement (per 100g or per 100 ml). Theoretically it is possible to figure out how much of something per cup or slice (etc) is in grams by using product_weight variable and further internet search (e.g. how many grams is 1/2 of flour). However, this is very **labour intensive**. 
+- Also, for beverages reported in ml, it is difficult to convert them to grams because of the different viscosity of beverages. One option would be to take ml equal to grams (as per water), but **this is likely to cause errors for for things like sauces, oils and spreads.**
+
+# Extract the correct amount of gram or ml
+The existing data didn't extract the ml of the product.
+Also there are some cases where the serving size shows 25gr but the dataset didn't detect it.
+We will not extract cases other measurement, like : 
+- teaspoon  
+- tablespoon  
+- cup  
+- can  
+- bottle  
+- pack  
+
+```{r}
+serving_info = dataset %>% select(upc,serving_size,serving_size_units,serving_size_value) %>% filter(serving_size != '')
+serving_info$contain_ml = grepl("ml",tolower(serving_info$serving_size))
+serving_info$contain_ml %>% table() 
+
+serving_info <- serving_info %>%
+  mutate(ml_value = str_extract(serving_size, "\\d+\\.?\\d*\\s*mL"),
+         g_value = str_extract(serving_size, "\\d+\\.?\\d*\\s*g"))
+
+# Clean up the extracted values
+serving_info <- serving_info %>%
+  mutate(ml = str_extract(ml_value, "\\d+\\.?\\d*"),
+         g = str_extract(g_value, "\\d+\\.?\\d*")) %>% select(upc,ml,g)
+serving_info = serving_info %>% pivot_longer(c(ml,g),names_to = "serving_size_units",values_to = "serving_size_value") %>% filter(!is.na(serving_size_value))
+dataset = dataset %>% select(-serving_size_units,-serving_size_value) %>% merge(serving_info,by = "upc",all = T)
+```
+
+```{r}
+#Compute the rate of reporting in grams
+nrow_ml_g = dataset %>% filter(serving_size_units %in% c('g','ml')) %>% nrow()
+nrow_full = dataset %>% nrow()
+nrow_ml_g/nrow_full
+```
+
+## Total fat
+
+```{r}
+table(dataset$total_fat_units)
+```
+
+It is reasonable to keep only values in grams.
+
+## Total carbohydrate
+
+```{r}
+table(dataset$total_carbohydrate_units)
+```
+
+## Protein
+
+```{r}
+table(dataset$protein_units)
+```
+
+## Sodium
+
+```{r}
+table(dataset$sodium_units)
+```
+
+We'll only keep mg values and convert these to grams. We'll also make the assumption that all added nutrients are listed per serving size due to the filtering done above. But just in case we'll add the same check as done before.
+
+Let's check if other nutrients can receive the same treatment as sodium.
+
+## Sugar
+
+```{r}
+table(dataset$sugar_units)
+```
+
+Sugar is in grams already, so just need to convert it to per 100g.
+
+## Saturated fat
+
+```{r}
+table(dataset$saturated_fat_units)
+```
+
+Same for saturated fat.
+
+## Cholesterol
+
+```{r}
+table(dataset$cholesterol_units)
+```
+
+Cholesterol we'll treat like sodium.
+
+## Trans fat
+
+```{r}
+table(dataset$trans_fat_units)
+```
+
+## Dietary fiber
+
+```{r}
+table(dataset$dietary_fiber_units)
+```
+
+```{r}
+dataset = dataset %>% mutate(
+  is_serving_non_gram_ml = (!serving_size_units %in% c('g','ml')),
+  is_serving_missing = serving_size=="",
+  is_macro_non_gram = !(
+    sodium_units == 'mg' |
+    sugar_units == 'g' |
+    saturated_fat_units == 'g' |
+    cholesterol_units == 'mg' |
+    trans_fat_units == 'g' |
+    dietary_fiber_units == 'g' |
+    total_carbohydrate_units == 'g' |
+    total_fat_units == 'g' |
+    protein_units == 'g'
+  )
+)
+```
+
+
+## 6. Serving size vs Nutritional content
+
+Next let's check if nutrients actually reflect nutritional context per serving size.
+
+```{r}
+#Convert mg to g
+dataset = dataset %>%
+  mutate(sodium_value = sodium_value/1000, cholesterol_value = cholesterol_value/1000)
+```
+
+```{r}
+dataset %>%
+  mutate(
+    macro_sum = protein_value + (total_fat_value - trans_fat_value - saturated_fat_value) +
+      (total_carbohydrate_value - sugar_value - dietary_fiber_value) +
+      sodium_value + cholesterol_value
+  ) %>% mutate(difference = as.numeric(serving_size_value) - macro_sum) %>%
+  select(
+    serving_size_units,
+    macro_sum,
+    difference,
+    total_fat_value,
+    total_carbohydrate_value,
+    sugar_value,
+    sodium_value, saturated_fat_value, trans_fat_value, cholesterol_value, dietary_fiber_value) %>% 
+  filter(difference < 0)
+```
+
+108 rows indicate inconsistencies with serving size and therefore will be removed.
+
+```{r}
+dataset = dataset %>%
+  mutate(macro_sum = protein_value+(total_fat_value-trans_fat_value-saturated_fat_value)+
+           (total_carbohydrate_value-sugar_value-dietary_fiber_value)+sodium_value+cholesterol_value) %>% mutate(difference = as.numeric(serving_size_value) - macro_sum) %>% mutate(is_macro_vs_size_inconsistent = difference < 0)
+```
+
+```{r}
+dataset = dataset %>% select(-c(macro_sum, difference))
+```
+
+Now we can scale our nutrients to common level of measurement (per 100g).
+
+```{r}
+dataset$serving_size_value = as.numeric(dataset$serving_size_value)
+dataset = dataset %>% 
+  mutate(sodium_scaled = (sodium_value*100)/serving_size_value,
+                   sugar_scaled = (sugar_value*100)/serving_size_value,
+                   saturated_fat_scaled = (saturated_fat_value*100)/serving_size_value,
+         trans_fat_scaled = (trans_fat_value*100)/serving_size_value,
+         cholesterol_scaled = (cholesterol_value*100)/serving_size_value,
+         dietary_fiber_scaled = (dietary_fiber_value*100)/serving_size_value,
+         protein_scaled = (protein_value*100)/serving_size_value,
+         carbohydrate_scaled = (total_carbohydrate_value*100)/serving_size_value,
+         fat_scaled = (total_fat_value*100)/serving_size_value)
+```
+
+
+## 7. Micronutrients missingness
+
+Now let's examine the extent of missingness.
+
+```{r}
+columns_with_value = grep("value", names(dataset), value = TRUE) #all nutrients are spread across three columns (name, units, value). Similarly to serving size, we'll be working with available data in columns units and value, as checking inconsistencies with name column would be a lenghty process.
+
+missing_values_per_col = sapply(dataset[!dataset$is_category_unrelevant,columns_with_value], function(x) sum(is.na(x) | x == ""))
+missing_values_per_col = sort(missing_values_per_col, decreasing = TRUE)
+
+par(mar=c(3, 10, 3, 2)) 
+
+#Plot top 30 columns with least missing values
+barplot(missing_values_per_col[60:91],
+        horiz = TRUE,      # Horizontal barplot
+        main = 'Missing values per column',
+        xlab = 'Number of missing values',
+        ylab = NULL,
+        las = 1,           # Make column names horizontal
+        col = "skyblue",
+        cex.names = 0.5,
+        space = 0.1)  
+```
+
+Starting from sugar content we are starting to lose a lot of data. Missingness indicates that value is NA or is blank, not 0. Let's check products from a few columns to test the hypothesis that NA (for numeric columns) could be assumed 0, i.e that product does not in fact contain nutrient X.
+
+Chickpeas, potatoes and beef contain iron and vitamin B6. Let's check if this is reported consistently to disprove the hypothesis.
+
+```{r}
+dataset %>%
+  select(product_name, iron, iron_units, iron_value, vitamin_b.6, vitamin_b.6_units, vitamin_b.6_value) %>%
+  filter(str_detect(product_name, "(?i)chickpeas"))
+```
+
+```{r}
+dataset %>%
+  select(product_name, iron, iron_units, iron_value, vitamin_b.6, vitamin_b.6_units, vitamin_b.6_value) %>%
+  filter(str_detect(product_name, "(?i)potato"))
+```
+
+```{r}
+dataset %>%
+  select(product_name, iron, iron_units, iron_value, vitamin_b.6, vitamin_b.6_units, vitamin_b.6_value) %>%
+  filter(str_detect(product_name, "(?i)beef"))
+```
+
+As showed per missing data graph, **vitamin B6 is missing most of the time, including in products where it should be contained**. Therefore, **it cannot be assumed that NA == 0 and we have to make a selection of nutrients with acceptable level of missing values**. We'll also assume that NA != 0 applies to all nutrients, as it would be very lengthy to check if this is the case for each nutrient. It would also make no sense that most to all data do not contain common nutrients such as magnesium, zinc and potassium.
+
+We can retain a reasonable amount of data by focusing on columns : - total_fat\
+- total_carbohydrate\
+- protein\
+- saturated_fat\
+- trans_fat\
+- sugar\
+- sodium\
+- cholesterol\
+- dietary_fiber
+
+## 8. Final filtering of the data
+
+```{r}
+transpose_df <- function(df) {
+  t_df <- data.table::transpose(df)
+  colnames(t_df) <- rownames(df)
+  rownames(t_df) <- colnames(df)
+  t_df <- t_df %>%
+    tibble::rownames_to_column(.data = .) %>%
+    tibble::as_tibble(.)
+  return(t_df)
+}
+
+dataset %>% 
+  summarise(
+    '% row with unrelevant category' = mean(is_category_unrelevant)*100,
+    '% row with missing macro' = mean(count_missing_macro>0)*100,
+    '% row without ingredients' = mean(is_missing_ingredient)*100,
+    '% row with duplicated products' = mean(is_duplicated)*100,
+    '% row with serving size not available' = mean(is_serving_missing)*100,
+    '% row with serving size not as gram or ml' = mean(is_serving_non_gram_ml)*100,
+    '% row with contradicting serving (given macro information exist)' = mean(is_macro_vs_size_inconsistent,na.rm = T)*100
+  ) %>% transpose_df() %>% 
+  rename(issue_type = rowname,"percentage (%)"="1")
+
+```
+```{r}
+tibble("original dataset" = nrow(dataset),
+           "relevant category" = nrow(dataset %>% filter(!is_category_unrelevant)),
+           "relevant category + macro info" = nrow(dataset %>% filter(!is_category_unrelevant,count_missing_macro==0)),
+           "relevant category + macro info + ingriedient info" = nrow(dataset %>% filter(!is_category_unrelevant,count_missing_macro==0,!is_missing_ingredient)),
+       "relevant category + macro info + ingriedient info + non duplicated" = nrow(dataset %>% filter(!is_category_unrelevant,count_missing_macro==0,!is_missing_ingredient,!is_duplicated)),
+       "relevant category + macro info + ingriedient info + non duplicated + good serving info" = nrow(dataset %>% filter(!is_category_unrelevant,count_missing_macro==0,!is_missing_ingredient,!is_duplicated,is_macro_vs_size_inconsistent %in% c(NA,FALSE),!is_serving_missing,!is_serving_non_gram_ml,!is_macro_non_gram))) %>% transpose_df()
+```
+
+```{r}
+dataset_clean = dataset %>% filter(
+  !is_category_unrelevant,
+  count_missing_macro == 0,
+  !is_missing_ingredient,
+  !is_duplicated,
+  is_macro_vs_size_inconsistent %in% c(NA, FALSE),
+  !is_serving_missing,
+  !is_serving_non_gram_ml
+)
+
+dataset_clean = dataset_clean %>% select(total_fat_units, total_fat_value,
+                                       total_carbohydrate_units, total_carbohydrate_value,
+                                       protein_units, protein_value,
+                                       saturated_fat_units, saturated_fat_value,
+                                   sodium_units, sodium_value,
+                                   dietary_fiber_units, dietary_fiber_value,
+                                   cholesterol_units, cholesterol_value,
+                                   sugar_units, sugar_value,
+                                   trans_fat_units, trans_fat_value,
+                                   product_name, serving_size_units, serving_size_value,
+                                   ingredients, category_1, category_2)
+
+```
+
+
+## Data after cleaning
+
+Let's compare the sample of products per category with the raw data.
+```{r}
+plot_raw_data = as.data.frame(table(dataset[!dataset$is_category_unrelevant,'category_2'])) %>%
+  arrange(desc(Freq)) %>%          # Sort by frequency in descending order
+  slice_head(n = 25) %>%           # Select the top 25 rows
+  ggplot(aes(x = Freq, y = reorder(Var1, Freq))) +
+  geom_bar(stat = 'identity', fill = 'steelblue') +
+  theme_bw() + xlab('Number of products') + ylab('Category 2') + ggtitle('Sample of products before data cleaning\n(excluding unrelevant categories)')
+
+plot_raw_data
+```
+
+```{r}
+plot_clean_data = as.data.frame(table(dataset_clean$category_2)) %>%
+  arrange(desc(Freq)) %>%          # Sort by frequency in descending order
+  slice_head(n = 25) %>%           # Select the top 25 rows
+  ggplot(aes(x = Freq, y = reorder(Var1, Freq))) +
+  geom_bar(stat = 'identity', fill = 'steelblue') +
+  theme_bw() + xlab('Number of products') + ylab('Category 2') + ggtitle('Sample of products after data cleaning')
+
+plot_clean_data
+```
+
+
+Both samples of products appear comparable. Selection bias towards more processed foods in the sample due to removal of items based on missing serving size could have caused the decrease in products in category 'Baking & Cooking'.
+
+```{r}
+dataset_clean %>% write.csv("kroger_clean.csv")
+```
+
